@@ -1,0 +1,38 @@
+ollama:
+  host: http://localhost:11434
+  model: llama3.2:latest
+  temperature: 0.7
+
+output:
+  create_report: true
+  directory: output
+
+processing:
+  chunk_overlap: 200
+  chunk_size: 4000
+  output_format: markdown
+  processing_mode: summary
+  save_chunks: false
+  summary_mode: classic   # classic | strict
+  summary_max_chars: 12000
+  summary_temperature: 0.15
+  require_citations: true
+  parallel:
+    enabled: false
+    book_workers: 3
+    chunk_workers: 4
+    embedding_batch_size: 32
+    queue_timeout: 300
+  progress:
+    enabled: true
+    update_interval: 2
+    show_book_names: true
+    show_chunk_progress: true
+    show_embedding_progress: true
+
+logging:
+  level: info
+  verbose: false
+
+features:
+  parallel_processing: true

@@ -19,6 +19,14 @@
 - Use consistent naming conventions and follow language-specific best practices.
 - Write concise, efficient, and idiomatic code that is also easily understandable.
 
+
+## Error Handling and Nullability
+
+- When writing a function or method that can fail or return no result, explicitly document this in the docstring and use Optional types in type hints (e.g., Optional[str]).
+- If a function can return None (or a similar sentinel value), ensure all calling code checks for this case and handles it appropriately (e.g., with if result is None: ...).
+- Prefer raising exceptions for truly exceptional or unrecoverable errors, and document which exceptions may be raised.
+- When updating a function to allow None or to raise exceptions, always update all callers to handle the new behavior.
+
 ## Code Style and Formatting
 
 - Follow the **PEP 8** style guide for Python.

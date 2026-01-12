@@ -2,9 +2,11 @@
 text_pipeline.py
 
 Subtitle parsing and text embedding utilities for RAG-Lab.
+Automatically generates subtitles if missing using faster-whisper.
 """
 
 from typing import List, Dict, Any, Optional
+import os
 
 # Subtitle parsing
 try:
@@ -23,13 +25,33 @@ try:
 except ImportError:
     SentenceTransformer = None
 
-class SubtitleParser:
-    """Handles parsing of SRT/VTT subtitle files."""
-    def __init__(self, backend: str = "pysubs2"):
-        self.backend = backend
+# Auto subtitle generation
+try:
+    from .auto_subtitle import AutoSubtitleGenerator
+except ImportError:
+    AutoSubtitleGenerator = None
 
-    def parse(self, file_path: str) -> List[Dict[str, Any]]:
-        """Parse subtitle file and return list of segments with text and timestamps."""
+class SubtitleParser:
+    """Handles parsing of SRT/VTT subtitle files. Generates subtitles if missing."""
+    def __init__(self, backend: str = "pysubs2", auto_generate: bool = True, model_size: str = "base"):
+        self.backend = backend
+        self.auto_generate = auto_generate
+        self.model_size = model_size
+        self._auto_sub = None
+        if auto_generate and AutoSubtitleGenerator is not None:
+            self._auto_sub = AutoSubtitleGenerator(model_size=model_size)
+
+    def parse(self, file_path: str, video_path: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Parse subtitle file and return list of segments with text and timestamps.
+        If file_path does not exist and auto_generate is enabled, generate subtitles from video_path.
+        """
+        if not os.path.exists(file_path):
+            if self.auto_generate and self._auto_sub and video_path:
+                print(f"Subtitle file {file_path} not found. Generating with faster-whisper...")
+                file_path = self._auto_sub.generate(video_path, output_path=file_path)
+            else:
+                raise FileNotFoundError(f"Subtitle file {file_path} not found and auto-generation is disabled or unavailable.")
         if self.backend == "pysubs2" and pysubs2:
             subs = pysubs2.load(file_path)
             return [
@@ -67,6 +89,6 @@ class TextEmbedder:
 
 # Example usage (to be removed or moved to tests):
 # parser = SubtitleParser()
-# segments = parser.parse("example.srt")
+# segments = parser.parse("example.srt", video_path="example.mp4")
 # embedder = TextEmbedder()
 # embeddings = embedder.embed([seg["text"] for seg in segments])

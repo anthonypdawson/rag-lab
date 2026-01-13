@@ -11,6 +11,10 @@ import hashlib
 import os
 import logging
 
+from rag_lab.core.text_pipeline import SubtitleParser, TextEmbedder
+from rag_lab.core.video_pipeline import FrameExtractor, VideoEmbedder
+from rag_lab.core.chromadb_client import ChromaDBClient
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("rag_lab.pipeline")
 
@@ -49,23 +53,28 @@ class VideoFrame:
 class FileProcessingPipeline:
     def __init__(self, config: Dict[str, Any] = None):
         self.config = config or {}
+        self.subtitle_parser = SubtitleParser()
+        self.text_embedder = TextEmbedder()
+        self.frame_extractor = None  # Lazy init to avoid loading CLIP if not needed
+        self.video_embedder = None
+        self.db_client = ChromaDBClient()
 
     def process(self, file_path: str) -> Dict[str, Any]:
         """
         Main entry point: processes a video file and returns embeddings and metadata for each modality.
         """
         logger.info(f"Starting processing for file: {file_path}")
-        # 1. Extract metadata
+        # 1. Extract metadata once
         metadata = self.extract_metadata(file_path)
         logger.info("Metadata extraction complete.")
         # 2. Extract and embed subtitles
-        text_results = self.process_text(file_path)
+        text_results = self.process_text(file_path, metadata)
         logger.info("Text processing complete.")
         # 3. Extract and embed audio
-        audio_results = self.process_audio(file_path)
+        audio_results = self.process_audio(file_path, metadata)
         logger.info("Audio processing complete.")
         # 4. Extract and embed video frames
-        video_results = self.process_video(file_path)
+        video_results = self.process_video(file_path, metadata)
         logger.info("Video processing complete.")
         # 5. Combine results
         logger.info("All processing steps complete.")
@@ -119,17 +128,91 @@ class FileProcessingPipeline:
         file_hash = self.compute_md5(file_path)
         return Metadata(file_path=file_path, file_hash=file_hash)
 
-    def process_text(self, file_path: str) -> List[TextSegment]:
+    def process_text(self, file_path: str, metadata: Metadata) -> List[TextSegment]:
         logger.info(f"Processing text for: {file_path}")
-        # TODO: Extract subtitles, generate embeddings
-        return []
+        
+        video_hash = metadata.file_hash
+        
+        # Parse subtitles using SubtitleParser
+        segments = self.subtitle_parser.parse(file_path)
+        if not segments:
+            logger.warning(f"No subtitles found for: {file_path}")
+            return []
+        
+        logger.info(f"Parsed {len(segments)} subtitle segments.")
+        
+        # Get or create subtitles collection
+        collection = self.db_client.get_or_create_collection("subtitles")
+        
+        # Embed and store in ChromaDB
+        self.text_embedder.embed_and_store_subtitles(segments, collection, video_hash, file_path)
+        logger.info(f"Embedded and stored {len(segments)} subtitle segments.")
+        
+        # Convert to TextSegment format for return
+        text_segments = []
+        for seg in segments:
+            text_segments.append(TextSegment(
+                text=seg.text,
+                start=seg.start,
+                end=seg.end,
+                metadata={
+                    "file_path": file_path,
+                    "file_hash": video_hash
+                }
+            ))
+        
+        return text_segments
 
-    def process_audio(self, file_path: str) -> List[AudioSegment]:
+    def process_audio(self, file_path: str, metadata: Metadata) -> List[AudioSegment]:
         logger.info(f"Processing audio for: {file_path}")
         # TODO: Segment audio, generate embeddings
+        # video_hash = metadata.file_hash
         return []
 
-    def process_video(self, file_path: str) -> List[VideoFrame]:
+    def process_video(self, file_path: str, metadata: Metadata) -> List[VideoFrame]:
         logger.info(f"Processing video frames for: {file_path}")
-        # TODO: Extract frames, generate embeddings
-        return []
+        
+        video_hash = metadata.file_hash
+        
+        # Get configuration
+        fps = self.config.get('video_fps', 1.0)
+        max_dimension = self.config.get('max_dimension', None)  # None = auto-detect based on RAM
+        batch_size = self.config.get('batch_size', 32)
+        
+        # Lazy initialization of video components
+        if self.frame_extractor is None:
+            self.frame_extractor = FrameExtractor(fps=fps, max_dimension=max_dimension)
+        if self.video_embedder is None:
+            self.video_embedder = VideoEmbedder()
+        
+        # Extract frames
+        frames = self.frame_extractor.extract_frames(file_path)
+        
+        if not frames:
+            logger.warning(f"No frames extracted from: {file_path}")
+            return []
+        
+        logger.info(f"Extracted {len(frames)} frames at {fps} fps")
+        
+        # Get or create video collection
+        collection = self.db_client.get_or_create_collection("video")
+        
+        # Embed and store
+        self.video_embedder.embed_and_store_frames(
+            frames, collection, video_hash, file_path, batch_size=batch_size
+        )
+        logger.info(f"Embedded and stored {len(frames)} frame embeddings.")
+        
+        # Return VideoFrame objects
+        video_frames = []
+        for frame in frames:
+            video_frames.append(VideoFrame(
+                timestamp=frame["timestamp"],
+                metadata={
+                    "file_path": file_path,
+                    "file_hash": video_hash,
+                    "frame_index": frame["index"]
+                }
+            ))
+        
+        return video_frames

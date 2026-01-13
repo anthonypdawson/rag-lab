@@ -30,20 +30,26 @@ This document outlines scope, architecture, deliverables, timeline, and acceptan
 - Documentation: setup, usage, troubleshooting.
 
 ## Timeline (Linux + GPU)
-- **Day 1**: Environment setup; metadata extraction; subtitle parsing.
-- **Day 2**: Text embeddings; frame extraction baseline.
-- **Day 3**: CLIP image embeddings; audio segmentation.
-- **Day 4**: Audio embeddings; ChromaDB schema + ingestion.
+- **Day 1**: ✅ COMPLETE - Environment setup; metadata extraction; subtitle parsing.
+- **Day 2**: ✅ COMPLETE - Text embeddings; ChromaDB integration; subtitle processing end-to-end.
+- **Day 3**: NEXT - Frame extraction baseline; CLIP image embeddings.
+- **Day 4**: Audio segmentation; audio embeddings.
 - **Day 5**: Retrieval APIs; CLI wiring; minimal docs.
 - **Days 6–10**: Tests, performance tuning (GPU batching, multiprocessing), expanded docs & examples.
 
 ## Milestones & Exit Criteria
-- **M1: Extraction Ready**
-  - Metadata, subtitles, frames, audio segments produced with timestamps.
-- **M2: Embeddings Ready**
-  - Text, image, audio embeddings generated locally; batchable on GPU.
-- **M3: Storage Ready**
-  - ChromaDB collections populated; metadata schema validated.
+- **M1: Extraction Ready** ✅ COMPLETE
+  - ✅ Metadata extraction with file hashing (partial for large files)
+  - ✅ Subtitle parsing (external/embedded/auto-generated with faster-whisper)
+  - TODO: Frames and audio segments extraction
+- **M2: Embeddings Ready** 🟡 IN PROGRESS
+  - ✅ Text embeddings (sentence-transformers) with GPU support
+  - TODO: Image embeddings (CLIP)
+  - TODO: Audio embeddings (CLAP/YAMNet)
+- **M3: Storage Ready** ✅ COMPLETE (for text)
+  - ✅ ChromaDB persistent client with accepted collections
+  - ✅ Subtitle embeddings stored with metadata and unique IDs
+  - TODO: Audio and video collections
 - **M4: Retrieval Ready**
   - Query by modality/time; returns items with linked metadata.
 - **M5: Usability Ready**
@@ -61,14 +67,17 @@ This document outlines scope, architecture, deliverables, timeline, and acceptan
 ## Dependencies
 - `ffmpeg`, `pymediainfo`, `pysubs2`/`srt`, `sentence-transformers`, `transformers`, `torch`, `chromadb`, `opencv-python`, `ffmpeg-python`.
 
-## Setup Checklist (Linux + CUDA, Poetry)
+## Setup Checklist (Windows/Linux + CUDA, Poetry)
 1. Install system tools: `ffmpeg` and `mediainfo`.
 2. Install project dependencies: `poetry install`.
 3. Install CUDA-enabled PyTorch in the Poetry environment:
   - `poetry run pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121` (adjust CUDA version as needed)
-4. Add missing libs (if not already in `pyproject.toml`):
+4. Install NVIDIA CUDA Toolkit (for faster-whisper GPU support):
+  - Download from https://developer.nvidia.com/cuda-downloads
+  - Verify installation: `nvcc --version`
+5. Add missing libs (if not already in `pyproject.toml`):
   - `poetry add transformers pymediainfo pysubs2 opencv-python ffmpeg-python`
-5. Verify GPU availability:
+6. Verify GPU availability:
   - `poetry run python -c "import torch; print('CUDA available:', torch.cuda.is_available())"`
 
 ## Risks & Mitigations

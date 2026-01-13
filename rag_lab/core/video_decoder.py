@@ -41,15 +41,25 @@ class VideoDecoder:
         subtitle_tracks = [t for t in media_info.tracks if t.track_type == 'Text']
         external_sub = self.find_external_subtitles()
         has_subtitles = len(subtitle_tracks) > 0 or external_sub is not None
+        # Prefer first English subtitle, else first available
+        selected_subtitle = None
+        if subtitle_tracks:
+            for t in subtitle_tracks:
+                if (t.language or '').lower() == 'en':
+                    selected_subtitle = t.language or 'und'
+                    break
+            if not selected_subtitle:
+                selected_subtitle = subtitle_tracks[0].language or 'und'
+
         return VideoMetadata(
             file_path=self.file_path,
             duration=float(video_track.duration) / 1000 if video_track and video_track.duration else None,
             framerate=float(video_track.frame_rate) if video_track and video_track.frame_rate else None,
             resolution=f"{video_track.width}x{video_track.height}" if video_track and video_track.width and video_track.height else None,
-            video_codec=video_track.codec if video_track and hasattr(video_track, 'codec') else None,
-            audio_codec=audio_track.codec if audio_track and hasattr(audio_track, 'codec') else None,
+            video_codec=(getattr(video_track, 'codec_id', None) or getattr(video_track, 'format', None)) if video_track else None,
+            audio_codec=(getattr(audio_track, 'codec_id', None) or getattr(audio_track, 'format', None)) if audio_track else None,
             has_subtitles=has_subtitles,
-            subtitle_tracks=[t.language or 'und' for t in subtitle_tracks],
+            subtitle_tracks=[selected_subtitle] if selected_subtitle else [],
             external_subtitle=external_sub,
             extra={},
         )
@@ -125,7 +135,7 @@ class VideoDecoder:
                 .input(self.file_path)
                 .output(output_srt, map='0:s:0')
                 .overwrite_output()
-                .run(quiet=True)
+                .run(quiet=False)
             )
             return output_srt if os.path.exists(output_srt) else None
         # Otherwise, return external subtitle file if found

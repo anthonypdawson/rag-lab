@@ -51,9 +51,9 @@ Core dependencies (see pyproject.toml):
 	```bash
 	poetry install
 	```
-3. Install CUDA-enabled PyTorch in the Poetry environment (example for CUDA 12.1):
+3. Install CUDA-enabled PyTorch in the Poetry environment (example for CUDA 13.0):
 	```bash
-	poetry run pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+	poetry run pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu130
 	```
 	Adjust the CUDA version as needed for your system. See https://pytorch.org/get-started/locally/ for details.
 4. Add missing libraries (if not already in pyproject.toml):

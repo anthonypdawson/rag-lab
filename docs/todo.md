@@ -9,7 +9,6 @@
 - Enable frame reproduction from vector data
 - Implement streaming frame extraction
 
-
 ## Audio
 - Integrate CLAP for audio embedding and search
 - Make audio processing optional in pipeline

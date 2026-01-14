@@ -1,4 +1,3 @@
-
 # RAG-Lab TODOs
 
 ## Frame Processing
@@ -22,6 +21,12 @@
 
 ## LLM Integration
 - Research and integrate multimodal LLM for text+image input
+
+## Advanced Research & Temporal Semantics
+- Implement temporal chunking using motion (optical flow), audio changes, or speech pauses
+- Integrate motion-aware (spatiotemporal) embedding models (e.g., TimeSformer, VideoCLIP)
+- Generate cross-modal text summaries/captions for video segments and store in vector DB
+- Design prompt engineering strategies for temporal context (e.g., compare segments, describe changes)
 
 ---
 Update this file as tasks are completed or new requirements are discovered.

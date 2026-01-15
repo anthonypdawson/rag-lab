@@ -26,7 +26,10 @@ class Metadata:
     resolution: Optional[str] = None
     codec: Optional[str] = None
     title: Optional[str] = None
-    year: Optional[int] = None
+    # Frame extraction parameters for reproducibility
+    extraction_fps: Optional[float] = None
+    extraction_max_dimension: Optional[int] = None
+    ffmpeg_version: Optional[str] = None
     extra: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
@@ -126,7 +129,38 @@ class FileProcessingPipeline:
         logger.info(f"Extracting metadata for: {file_path}")
         # TODO: Implement metadata extraction (ffprobe, pymediainfo, etc.)
         file_hash = self.compute_md5(file_path)
-        return Metadata(file_path=file_path, file_hash=file_hash)
+        
+        # Get ffmpeg version for reproducibility tracking
+        ffmpeg_version = self._get_ffmpeg_version()
+        
+        # Get extraction parameters from config
+        extraction_fps = self.config.get('video_fps', 1.0)
+        extraction_max_dimension = self.config.get('max_dimension', None)
+        
+        return Metadata(
+            file_path=file_path, 
+            file_hash=file_hash,
+            extraction_fps=extraction_fps,
+            extraction_max_dimension=extraction_max_dimension,
+            ffmpeg_version=ffmpeg_version
+        )
+    
+    def _get_ffmpeg_version(self) -> Optional[str]:
+        """Get ffmpeg version for reproducibility tracking."""
+        try:
+            import subprocess
+            result = subprocess.run(
+                ['ffmpeg', '-version'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            # Extract version from first line (e.g., "ffmpeg version 4.4.2")
+            first_line = result.stdout.split('\\n')[0]
+            return first_line.strip()
+        except Exception as e:
+            logger.warning(f"Could not determine ffmpeg version: {e}")
+            return None
 
     def process_text(self, file_path: str, metadata: Metadata) -> List[TextSegment]:
         logger.info(f"Processing text for: {file_path}")
@@ -181,12 +215,13 @@ class FileProcessingPipeline:
         
         # Lazy initialization of video components
         if self.frame_extractor is None:
-            self.frame_extractor = FrameExtractor(fps=fps, max_dimension=max_dimension)
+            output_dir = self.config.get('frames_output_dir', 'data')
+            self.frame_extractor = FrameExtractor(fps=fps, max_dimension=max_dimension, output_dir=output_dir)
         if self.video_embedder is None:
             self.video_embedder = VideoEmbedder()
         
         # Extract frames
-        frames = self.frame_extractor.extract_frames(file_path)
+        frames = self.frame_extractor.extract_frames(file_path, video_hash)
         
         if not frames:
             logger.warning(f"No frames extracted from: {file_path}")
@@ -199,7 +234,8 @@ class FileProcessingPipeline:
         
         # Embed and store
         self.video_embedder.embed_and_store_frames(
-            frames, collection, video_hash, file_path, batch_size=batch_size
+            frames, collection, video_hash, file_path, 
+            sampling_rate=fps, max_dimension=max_dimension, batch_size=batch_size
         )
         logger.info(f"Embedded and stored {len(frames)} frame embeddings.")
         
@@ -211,7 +247,12 @@ class FileProcessingPipeline:
                 metadata={
                     "file_path": file_path,
                     "file_hash": video_hash,
-                    "frame_index": frame["index"]
+                    "frame_index": frame["index"],
+                    "timestamp": frame["timestamp"],
+                    "sampling_rate": fps,
+                    "max_dimension": max_dimension,
+                    "frame_filename": frame["filename"],
+                    "frame_path": frame["frame_path"]
                 }
             ))
         

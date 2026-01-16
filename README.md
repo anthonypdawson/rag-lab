@@ -47,19 +47,28 @@ Core dependencies (see pyproject.toml):
 
 
 1. Install system tools: `ffmpeg` and `mediainfo`.
+
 2. Install project dependencies:
 	```bash
 	poetry install
 	```
+
 3. Install CUDA-enabled PyTorch in the Poetry environment (example for CUDA 13.0):
 	```bash
 	poetry run pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu130
 	```
 	Adjust the CUDA version as needed for your system. See https://pytorch.org/get-started/locally/ for details.
+
 4. Add missing libraries (if not already in pyproject.toml):
 	```bash
 	poetry add transformers pymediainfo pysubs2 opencv-python ffmpeg-python
 	```
+
+5. Pre-download the sentence-transformers embedding model (optional but recommended to avoid download timeouts):
+	```bash
+	poetry run huggingface-cli download sentence-transformers/all-MiniLM-L6-v2 --local-dir ./models/all-MiniLM-L6-v2
+	```
+	The pipeline will automatically detect and use the local model from `./models/all-MiniLM-L6-v2` if present, otherwise it will download from Hugging Face.
 
 6. Install the correct NVIDIA CUDA Toolkit for GPU support with faster-whisper:
 	- See [CUDA setup guidance](https://github.com/SYSTRAN/faster-whisper/issues/1276) for details on required CUDA versions and installation steps for Windows and Linux.

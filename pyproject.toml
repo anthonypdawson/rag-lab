@@ -7,6 +7,7 @@ description = ""
 authors = ["Your Name <you@example.com>"]
 readme = "README.md"
 
+
 [tool.poetry.dependencies]
 python = ">=3.12,<3.15"
 faiss-cpu = ">=1.13.2,<2.0.0"
@@ -25,6 +26,7 @@ ffmpeg-python = ">=0.2.0,<0.3.0"
 faster-whisper = "^1.2.1"
 pillow = "^12.1.0"
 psutil = "^7.2.1"
+hf-xet = "^1.2.0"
 
 
 [build-system]

@@ -55,7 +55,8 @@ class SubtitleParser:
         2. Embedded subtitles (prefer English, else first)
         3. Auto-generate with faster-whisper if none found
         Returns list of segments with text and timestamps.
-        Automatically cleans up any temp files generated during extraction.
+        Note: Auto-generated subtitle files are persisted on disk ("._auto.srt")
+        so they can be reused on subsequent runs and referenced elsewhere.
         """
         temp_files = []
         # 1. Search for external subtitle file
@@ -64,7 +65,7 @@ class SubtitleParser:
             candidate = base + ext
             if os.path.exists(candidate):
                 logger.info(f"Found external subtitle file: {candidate}")
-                return self._parse_file(candidate)
+                return self._parse_file(candidate, origin="external")
 
         # 2. Check for embedded subtitles
         try:
@@ -90,19 +91,24 @@ class SubtitleParser:
                 if out_path and os.path.exists(out_path):
                     logger.info(f"Extracted embedded subtitles to: {out_path}")
                     temp_files.append(out_path)
-                    segments = self._parse_file(out_path)
+                    segments = self._parse_file(out_path, origin="embedded", language=selected)
                     self._cleanup_temp_files(temp_files)
                     return segments
 
         # 3. Auto-generate with faster-whisper
         if self.auto_generate and self._auto_sub is not None:
-            logger.info(f"No subtitles found. Generating with faster-whisper for: {video_path}")
             gen_path = os.path.splitext(video_path)[0] + "._auto.srt"
+            # Reuse existing auto-generated subtitles if present
+            if os.path.exists(gen_path):
+                logger.info(f"Found existing auto-generated subtitles: {gen_path}")
+                return self._parse_file(gen_path, origin="auto")
+
+            logger.info(f"No subtitles found. Generating with faster-whisper for: {video_path}")
             out_path = self._auto_sub.generate(video_path, output_path=gen_path)
             if out_path and os.path.exists(out_path):
-                temp_files.append(out_path)
-                segments = self._parse_file(out_path)
-                self._cleanup_temp_files(temp_files)
+                logger.info(f"Auto-generated subtitles saved to: {out_path}")
+                segments = self._parse_file(out_path, origin="auto")
+                # Do NOT delete auto-generated subtitles; keep for future reuse
                 return segments
 
         logger.warning(f"No subtitles found for video: {video_path}")
@@ -116,15 +122,22 @@ class SubtitleParser:
             except Exception as e:
                 logger.warning(f"Failed to remove temp file {f}: {e}")
 
-    def _parse_file(self, file_path: str) -> List[Dict[str, Any]]:
-        """Parse a subtitle file into segments."""
+    def _parse_file(self, file_path: str, origin: str = "unknown", language: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Parse a subtitle file into segments, annotating origin and language.
+
+        origin: one of {external, embedded, auto, unknown}
+        language: ISO code when available (e.g., 'en'), defaults to 'und'
+        """
         if self.backend == "pysubs2" and pysubs2:
             subs = pysubs2.load(file_path)
             return [
                 {
                     "start": event.start / 1000.0,
                     "end": event.end / 1000.0,
-                    "text": event.text
+                    "text": event.text,
+                    "origin": origin,
+                    "language": language or "und",
+                    "source_path": file_path,
                 }
                 for event in subs
             ]
@@ -135,7 +148,10 @@ class SubtitleParser:
                 {
                     "start": sub.start.total_seconds(),
                     "end": sub.end.total_seconds(),
-                    "text": sub.content
+                    "text": sub.content,
+                    "origin": origin,
+                    "language": language or "und",
+                    "source_path": file_path,
                 }
                 for sub in subs
             ]
@@ -176,6 +192,8 @@ class TextEmbedder:
                 "start": seg.get("start"),
                 "end": seg.get("end"),
                 "language": seg.get("language", "und"),
+                "origin": seg.get("origin", "unknown"),
+                "subtitle_source_path": seg.get("source_path"),
             }
             for seg in segments
         ]

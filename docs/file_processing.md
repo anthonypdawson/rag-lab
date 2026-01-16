@@ -31,6 +31,8 @@ All extracted data is linked by timestamps and stored in a vector database for e
 5. **Subtitle/Text Extraction**
    - Extracts subtitle text and aligns it with timestamps.
    - Supports common subtitle formats (SRT, VTT, etc.).
+   - If no subtitles exist, the system auto-generates an SRT via faster-whisper and persists it alongside the video using the suffix `._auto.srt`. Future runs will reuse this file rather than regenerating.
+   - Each subtitle segment captures provenance metadata in the vector store: `origin` (external | embedded | auto) and `language` (ISO code when available, else `und`).
 
 6. **Embedding Generation**
    - Generates vector embeddings for each modality using appropriate models.

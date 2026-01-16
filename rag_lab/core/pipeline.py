@@ -10,9 +10,12 @@ from dataclasses import dataclass, field
 import hashlib
 import os
 import logging
+import json
+from pathlib import Path
 
 from rag_lab.core.text_pipeline import SubtitleParser, TextEmbedder
 from rag_lab.core.video_pipeline import FrameExtractor, VideoEmbedder
+from rag_lab.core.audio_pipeline import AudioExtractor, AudioDescriber, AudioEmbedder
 from rag_lab.core.chromadb_client import ChromaDBClient
 
 logging.basicConfig(level=logging.INFO)
@@ -57,9 +60,14 @@ class FileProcessingPipeline:
     def __init__(self, config: Dict[str, Any] = None):
         self.config = config or {}
         self.subtitle_parser = SubtitleParser()
-        self.text_embedder = TextEmbedder()
+        # Lazy init: load text embedder only when needed in process_text
+        self.text_embedder = None
         self.frame_extractor = None  # Lazy init to avoid loading CLIP if not needed
         self.video_embedder = None
+        # Audio processing components (lazy init)
+        self.audio_extractor = None
+        self.audio_describer = None
+        self.audio_embedder = None
         self.db_client = ChromaDBClient()
 
     def process(self, file_path: str) -> Dict[str, Any]:
@@ -177,31 +185,167 @@ class FileProcessingPipeline:
         
         # Get or create subtitles collection
         collection = self.db_client.get_or_create_collection("subtitles")
-        
+
+        # Lazy-load text embedder, preferring a locally downloaded model
+        if self.text_embedder is None:
+            model_name = self._resolve_text_model()
+            self.text_embedder = TextEmbedder(model_name=model_name)
+
         # Embed and store in ChromaDB
         self.text_embedder.embed_and_store_subtitles(segments, collection, video_hash, file_path)
         logger.info(f"Embedded and stored {len(segments)} subtitle segments.")
         
-        # Convert to TextSegment format for return
-        text_segments = []
+        # Convert to TextSegment format for return, carrying provenance
+        text_segments: List[TextSegment] = []
         for seg in segments:
             text_segments.append(TextSegment(
-                text=seg.text,
-                start=seg.start,
-                end=seg.end,
+                text=seg["text"],
+                start=seg["start"],
+                end=seg["end"],
                 metadata={
                     "file_path": file_path,
-                    "file_hash": video_hash
+                    "file_hash": video_hash,
+                    "origin": seg.get("origin", "unknown"),
+                    "language": seg.get("language", "und"),
+                    "subtitle_source_path": seg.get("source_path"),
                 }
             ))
-        
+
         return text_segments
+
+    def _resolve_text_model(self) -> str:
+        """Resolve a local model path under './models' before falling back to HF id.
+
+        Preference order:
+        1) If 'text_model' is a valid directory path, use it directly.
+        2) If './models/<basename>' exists, use that path.
+        3) If './models/<org>/<basename>' exists, use that path.
+        4) Otherwise, return the original spec (HF id or short name).
+        """
+        spec = self.config.get("text_model", "all-MiniLM-L6-v2")
+        try:
+            # Direct path provided
+            if isinstance(spec, str) and os.path.isdir(spec):
+                return spec
+
+            models_dir = self.config.get("models_dir", "models")
+
+            # Derive basename from HF id like 'sentence-transformers/all-MiniLM-L6-v2'
+            parts = spec.replace("\\", "/").split("/")
+            base_name = parts[-1].replace(":", "_")
+            org_name = parts[-2] if len(parts) > 1 else None
+
+            # Check ./models/<basename>
+            candidate = os.path.join(models_dir, base_name)
+            if os.path.isdir(candidate):
+                return candidate
+
+            # Check ./models/<org>/<basename>
+            if org_name:
+                nested = os.path.join(models_dir, org_name, base_name)
+                if os.path.isdir(nested):
+                    return nested
+        except Exception:
+            pass
+        return spec
 
     def process_audio(self, file_path: str, metadata: Metadata) -> List[AudioSegment]:
         logger.info(f"Processing audio for: {file_path}")
-        # TODO: Segment audio, generate embeddings
-        # video_hash = metadata.file_hash
-        return []
+
+        video_hash = metadata.file_hash
+
+        # Get configuration
+        chunk_duration = self.config.get('audio_chunk_duration', 10.0)
+        overlap = self.config.get('audio_overlap', 2.0)
+        temp_dir = self.config.get('temp_dir', 'data/tmp')
+        audio_batch_size = self.config.get('audio_batch_size', 8)
+        # Note: Default to 'audio-caption' since speech is handled by subtitle pipeline
+        audio_model_provider = self.config.get('audio_model_provider', 'audio-caption')  # 'audio-caption', 'whisper', or 'combined'
+        whisper_model = self.config.get('whisper_model', 'base')
+
+        # Lazy initialization of audio components
+        if self.audio_extractor is None:
+            self.audio_extractor = AudioExtractor(chunk_duration=chunk_duration, overlap=overlap)
+        if self.audio_describer is None:
+            self.audio_describer = AudioDescriber(
+                model_provider=audio_model_provider,
+                model_name=whisper_model
+            )
+        if self.audio_embedder is None:
+            audio_model = self._resolve_text_model()  # Reuse text model resolver
+            self.audio_embedder = AudioEmbedder(model_name=audio_model)
+
+        audio_path = None
+        chunks = []
+        chunk_dir = None
+        try:
+            # Extract audio from video (with video_hash for reusability)
+            audio_path = self.audio_extractor.extract_audio(
+                file_path, 
+                temp_dir=temp_dir, 
+                video_hash=video_hash
+            )
+            # Chunk audio into segments (with video_hash for reusability)
+            chunks = self.audio_extractor.chunk_audio(
+                audio_path, 
+                temp_base=temp_dir, 
+                video_hash=video_hash
+            )
+            if not chunks:
+                logger.warning(f"No audio chunks created for: {file_path}")
+                return []
+
+            logger.info(f"Created {len(chunks)} audio chunks")
+
+            # Generate descriptions for each chunk (batched for efficiency)
+            descriptions = self.audio_describer.describe_batch(chunks, batch_size=audio_batch_size)
+
+            # Get or create audio collection
+            collection = self.db_client.get_or_create_collection("audio")
+
+            # Embed and store
+            self.audio_embedder.embed_and_store_audio(
+                chunks, descriptions, collection, video_hash, file_path
+            )
+            logger.info(f"Embedded and stored {len(chunks)} audio descriptions.")
+
+            # Optionally save segments to JSON for review
+            if self.config.get('save_audio_segments', False):
+                self._save_audio_segments_json(file_path, video_hash, chunks, descriptions)
+
+            # Return AudioSegment objects
+            audio_segments = []
+            for chunk, description in zip(chunks, descriptions):
+                audio_segments.append(AudioSegment(
+                    start=chunk["start"],
+                    end=chunk["end"],
+                    metadata={
+                        "file_path": file_path,
+                        "file_hash": video_hash,
+                        "duration": chunk["duration"],
+                        "chunk_index": chunk["index"],
+                        "description": description,
+                    }
+                ))
+            return audio_segments
+        finally:
+            # Cleanup temp audio file
+            if audio_path and os.path.exists(audio_path):
+                try:
+                    os.remove(audio_path)
+                    logger.info(f"Cleaned up temp audio file: {audio_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove temp audio file: {e}")
+            # Cleanup temp audio chunk files and directory
+            if chunks:
+                chunk_dir = os.path.dirname(chunks[0]['chunk_path'])
+                try:
+                    import shutil
+                    if os.path.exists(chunk_dir) and 'audio_chunks' in chunk_dir:
+                        shutil.rmtree(chunk_dir)
+                        logger.info(f"Cleaned up audio chunks directory: {chunk_dir}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove audio chunks directory: {e}")
 
     def process_video(self, file_path: str, metadata: Metadata) -> List[VideoFrame]:
         logger.info(f"Processing video frames for: {file_path}")
@@ -257,3 +401,40 @@ class FileProcessingPipeline:
             ))
         
         return video_frames
+
+    def _save_audio_segments_json(
+        self,
+        file_path: str,
+        video_hash: str,
+        chunks: List[Dict[str, Any]],
+        descriptions: List[str]
+    ):
+        """Save audio segments to JSON file for review."""
+        output_data = {
+            "video_path": file_path,
+            "video_hash": video_hash,
+            "total_chunks": len(chunks),
+            "segments": [
+                {
+                    "index": chunk["index"],
+                    "start": chunk["start"],
+                    "end": chunk["end"],
+                    "duration": chunk["duration"],
+                    "description": desc
+                }
+                for chunk, desc in zip(chunks, descriptions)
+            ]
+        }
+        
+        output_dir = self.config.get('audio_segments_output_dir', 'data')
+        os.makedirs(output_dir, exist_ok=True)
+        
+        output_file = os.path.join(
+            output_dir,
+            f"{video_hash}_audio_segments.json"
+        )
+        
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(output_data, f, indent=2, ensure_ascii=False)
+        
+        logger.info(f"Saved audio segments to: {output_file}")
